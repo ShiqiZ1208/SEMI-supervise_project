@@ -23,7 +23,7 @@ Bert_tokenizer = BertTokenizer.from_pretrained(Bert_ckpt)
 RoBERTa_ckpt = "roberta-base"
 roBerta_tokenizer = RobertaTokenizer.from_pretrained(RoBERTa_ckpt)
 class GANBARTDataset(Dataset):
-    def __init__(self, sentence1_list, sentence2_list, max_length=512):
+    def __init__(self, sentence1_list, sentence2_list, max_length=512, is_unsupervised = False):
         """
         Args:
             sentence1_list (list of str): List of sentence 1 strings.
@@ -34,7 +34,7 @@ class GANBARTDataset(Dataset):
         self.sentence1_list = sentence1_list
         self.sentence2_list = sentence2_list
         self.max_length = max_length
-
+        self.is_unsupervised = is_unsupervised
     def __len__(self):
         return len(self.sentence1_list)
 
@@ -65,14 +65,19 @@ class GANBARTDataset(Dataset):
         #bert_finput_id = bert_fencoding['input_ids'].squeeze(0)
         #bert_fmask = bert_fencoding['attention_mask'].squeeze(0)
 
-
-        return {'input_ids':input_ids , 
-        'attention_mask': attention_mask , 
-        'label': label, 
-        'bert_input_id': bert_input_id, 
-        'bert_mask': bert_mask 
-        }
-
+        if not self.is_unsupervised:
+            return {'input_ids':input_ids , 
+            'attention_mask': attention_mask , 
+            'label': label, 
+            'bert_input_id': bert_input_id, 
+            'bert_mask': bert_mask 
+            }
+        else:
+            return {'input_ids':input_ids , 
+            'attention_mask': attention_mask , 
+            'bert_input_id': bert_input_id, 
+            'bert_mask': bert_mask 
+            }
 
 
 
@@ -98,8 +103,9 @@ def create_dataset(is_argument = False ,lecture_path=None, summary_path=None, is
         data_set = list(zip(*rows))
         test_Lecture = list(data_set[3][900:])
         test_summary = list(data_set[4][900:])
-        t_Lecture = list(data_set[3][:800])
-        t_summary = list(data_set[4][:800])
+        t_Lecture = list(data_set[3][:300])
+        t_summary = list(data_set[4][:300])
+        u_Lecture = list(data_set[3][300:800])
         v_Lecture = list(data_set[3][800:900])
         v_summary = list(data_set[4][800:900])
         # create and return datasets
@@ -155,12 +161,21 @@ def samsum_dataset(is_argument = False ,lecture_path=None, summary_path=None, is
     del test_summary
     return train_dataset, validation_dataset, test_dataset
 
-def get_samsum():
+def get_samsum(is_unsupervised=True):
     ds = load_dataset("knkarthick/samsum")
-    train_dataset = GANBARTDataset(ds["train"]["dialogue"], ds["train"]["summary"])
-    validation_dataset = GANBARTDataset(ds["validation"]["dialogue"], ds["validation"]["summary"])
-    test_dataset = GANBARTDataset(ds["test"]["dialogue"], ds["test"]["summary"])
-    del ds
-    return train_dataset, validation_dataset, test_dataset
-
-
+    if not is_unsupervised:
+      #print(ds["train"]["dialogue"].shape)
+      train_dataset = GANBARTDataset(list(ds["train"]["dialogue"]), list(ds["train"]["summary"]))
+      validation_dataset = GANBARTDataset(list(ds["validation"]["dialogue"]), list(ds["validation"]["summary"]))
+      test_dataset = GANBARTDataset(list(ds["test"]["dialogue"]), list(ds["test"]["summary"]))
+      del ds
+      return train_dataset, validation_dataset, test_dataset
+    else:
+      #total_dataset = GANBARTDataset(list(ds["train"]["dialogue"]), list(ds["train"]["summary"]))
+      split_dataset = ds["train"].train_test_split(test_size=0.75,seed=42)
+      train_dataset = GANBARTDataset(list(split_dataset['train']["dialogue"]), list(split_dataset['train']["summary"]))
+      u_train_dataset = GANBARTDataset(list(split_dataset['test']["dialogue"]), list(split_dataset['test']["summary"]), is_unsupervised = True)
+      validation_dataset = GANBARTDataset(list(ds["validation"]["dialogue"]), list(ds["validation"]["summary"]))
+      test_dataset = GANBARTDataset(list(ds["test"]["dialogue"]), list(ds["test"]["summary"]))
+      del ds
+      return train_dataset, validation_dataset, test_dataset, u_train_dataset

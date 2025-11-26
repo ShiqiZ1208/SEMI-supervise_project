@@ -8,7 +8,7 @@ from tqdm.auto import tqdm
 from torch.optim import AdamW
 from torch.nn.utils import clip_grad_norm_
 import torch
-from ganmodel import BART_base_model, Roberta_discriminator, classification_loss
+from ganmodel import BART_base_model, Roberta_discriminator, classification_loss, RoBERTa_base_model
 import numpy as np
 import torch.nn.functional as F
 import os
@@ -20,7 +20,7 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
 
 ########################################## load the tokenizer and model ##################################################
     # load model ckpt from huggingface and use it to tokenizer
-    BART_model_ckpt = 'facebook/bart-base'
+    BART_model_ckpt = 'facebook/bart-large'
     RoBERTa_model_ckpt = "roberta-base"
     BA_tokenizer = BartTokenizer.from_pretrained(BART_model_ckpt)
     RBE_tokenizer = RobertaTokenizer.from_pretrained(RoBERTa_model_ckpt)
@@ -28,18 +28,16 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
       # if there is no model create a model using pretrain model from huggingface
     BaseG_model = BART_base_model(BART_model_ckpt)
     NetG = BaseG_model
-    BaseD_model = Roberta_discriminator(num_labels=1)
+    BaseD_model = RoBERTa_base_model(RoBERTa_model_ckpt)
     NetD = BaseD_model
 
-    t_dataset, v_dataset, test_dataset = get_samsum() #get_samsum() # load datasets
-    #print(len(t_dataset))
+    t_dataset, v_dataset, test_dataset, u_t_dataset = get_samsum() #get_samsum() # load datasets
     train_dataloader = DataLoader(t_dataset, shuffle=False, batch_size=minibatch_sizes, worker_init_fn=lambda worker_id: np.random.seed(seed))
-    #print(len(train_dataloader))
     eval_dataloader = DataLoader(v_dataset, shuffle=False, batch_size=minibatch_sizes, worker_init_fn=lambda worker_id: np.random.seed(seed))
     rouge = evaluate.load("rouge")
 
     optimizerG = AdamW(NetG.parameters(), lr=5e-5) # set up optimizer for Generator
-    optimizerD = AdamW(NetD.parameters(), lr=1e-5) # set up optimizer for Discrimnator
+    optimizerD = AdamW(NetD.parameters(), lr=2e-5) # set up optimizer for Discrimnator
 
     num_epochs = n_epochs # training epochs
 
@@ -75,13 +73,17 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
     time_for_convert = 0
     max_alpha = 1
     batches = 0
+    dis_only = False
+    bart_loss = 0
+    A_t = []
+    A_f = []
     for epoch in range(num_epochs):
         batches = 0
         NetD.train()
         NetG.train()
         for batch in train_dataloader:
             current_size = batch['input_ids'].shape[0]
-            real = 0.95
+            real = 1.0
             fake  = 0.0
             reallabel  = torch.full((current_size,), real).unsqueeze(1).to(device) 
             fakelabel  = torch.full((current_size,), fake).unsqueeze(1).to(device)
@@ -90,16 +92,9 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
             attention_mask =batch['attention_mask'].to(device)
             labels = batch['label'].to(device)
 
-            decoder_input_id = batch['bert_input_id'].to(device)
-            decoder_mask =batch['bert_mask'].to(device)
+            discrimnator_input_id = batch['bert_input_id'].to(device)
+            discrimnator_mask =batch['bert_mask'].to(device)
 
-            #bert_sinput_id = batch['bert_input_sd'].to(device)
-            #bert_smask = batch['bert_smask'].to(device)
-
-            #for p in NetG.parameters():
-                #p.requires_grad = False
-            #for p in NetD.parameters():
-                #p.requires_grad = True
 
             optimizerD.zero_grad()
 
@@ -119,43 +114,28 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
             padded_input_ids = F.pad(genrated, (0, 256 - genrated.shape[1]), value=1)
             roberta_attention_masks = (padded_input_ids != RBE_tokenizer.pad_token_id).long()
 
-            roberta_finput_ids = padded_input_ids.to(device) #padded_input_ids.to(device)
+            roberta_finput_ids = padded_input_ids.to(device)
             roberta_fattention_masks = roberta_attention_masks.to(device)
 
-            roberta_tinput_ids = decoder_input_id
+            roberta_tinput_ids = discrimnator_input_id
             roberta_tattention_masks = (roberta_tinput_ids != RBE_tokenizer.pad_token_id).long()
 
-            encoder_outputs = NetG.model.encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True
-            )
-            feature_layer = encoder_outputs.last_hidden_state
-            decoder_foutputs = NetG.model.decoder(
-            input_ids=roberta_finput_ids,
-            attention_mask=roberta_fattention_masks,
-            encoder_hidden_states=feature_layer,
-            encoder_attention_mask=attention_mask
-            )
-            fake_feature = decoder_foutputs.last_hidden_state
-            fake_featured = fake_feature.detach()
 
-            decoder_toutputs = NetG.model.decoder(
-            input_ids=roberta_tinput_ids,
-            attention_mask=roberta_tattention_masks,
-            encoder_hidden_states=feature_layer,
-            encoder_attention_mask=attention_mask
-            )
-            true_featured = decoder_toutputs.last_hidden_state.detach()
 
 
             attention_mask_hidden = torch.ones(minibatch_sizes, 256).long()
-            flogits = NetD(fake_featured, attention_mask=attention_mask_hidden)
-            tlogits = NetD(true_featured, attention_mask=attention_mask_hidden)
+            flogits = NetD(roberta_finput_ids, attention_mask=attention_mask_hidden)
+            tlogits = NetD(roberta_tinput_ids, attention_mask=attention_mask_hidden)
 
-            loss1 = classification_loss(tlogits, reallabel)
-            loss2 = classification_loss(flogits, fakelabel)
+            loss1 = classification_loss(tlogits.logits, reallabel)
+            loss2 = classification_loss(flogits.logits, fakelabel)
 
+            preds = (torch.sigmoid(tlogits.logits.detach()) >= 0.5).long()
+            accuracyT = (preds == labels).float().mean()
+            A_t.append(accuracyT)
+            preds = (torch.sigmoid(flogits.logits.detach()) >= 0.5).long()
+            accuracyF = (preds == labels).float().mean()
+            A_f.append(accuracyF)
             Dloss = (loss1 + loss2)/2
             Dloss.backward()
             clip_grad_norm_(NetD.parameters(), max_norm=1.0)
@@ -164,26 +144,28 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
 
             #for p in NetG.parameters():
                 #p.requires_grad = True
-            for p in NetD.parameters():
-                p.requires_grad = False
+            if dis_only== False:
+                for p in NetD.parameters():
+                    p.requires_grad = False
 
-            optimizerG.zero_grad()
+                optimizerG.zero_grad()
 
-            output_g = NetG(input_ids=input_ids, attention_mask=attention_mask, labels = labels)
-            bart_loss = output_g.loss
-            slogits = NetD(fake_feature, attention_mask=attention_mask_hidden)
-            f_loss = classification_loss(slogits, reallabel)
+                output_g = NetG(input_ids=input_ids, attention_mask=attention_mask, labels = labels)
+                bart_loss = output_g.loss
 
-            Gloss = bart_loss + 0.3*f_loss
-            Gloss.backward()
-            clip_grad_norm_(NetG.parameters(), max_norm=1.0)
-            optimizerG.step()
-            lr_schedulerG.step()
-            
-            for p in NetD.parameters():
-                p.requires_grad = True
+                Gloss = bart_loss
+                Gloss.backward()
+                clip_grad_norm_(NetG.parameters(), max_norm=1.0)
+                optimizerG.step()
+                lr_schedulerG.step()
+                
+                for p in NetD.parameters():
+                    p.requires_grad = True
             if batches % 20 == 0:
-              print("\nEpoch:{: <5}| Batch:{: <5}| Gtrain_loss:{: <5.4f}|{: <5.4f}| Dtrain_loss:{: <5.4f}|{: <5.4f}".format(epochs, batches, bart_loss, f_loss , loss1, loss2))
+              print("\nEpoch:{: <5}| Batch:{: <5}| Gtrain_loss:{: <5.4f}| Dtrain_loss:{: <5.4f}|{: <5.4f}".format(epochs, batches, bart_loss , loss1, loss2))
+              print("\n discrimnator prediction:{: .2%}|{: .2%}".format(sum(A_t)/len(A_t), sum(A_f)/len(A_f)))
+              A_t = []
+              A_f = []
             progress_bar.update(1)
             batches += 1
 

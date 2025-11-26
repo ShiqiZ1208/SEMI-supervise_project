@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 from transformers import RobertaModel, RobertaConfig
 
-from transformers import AutoModelForSeq2SeqLM
+from transformers import AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
 
 def emb_triplet_loss(positives, negatives, anchors):
   margin = 0.3
@@ -24,11 +24,16 @@ def classification_loss(logits, labels):
 
 def BART_base_model(ckpt):
     # load the base BART model
-    model_ckpt = 'facebook/bart-base'
+    model_ckpt = ckpt
     base_model = AutoModelForSeq2SeqLM.from_pretrained(model_ckpt)
 
     return base_model
-
+    
+def RoBERTa_base_model(ckpt):
+    model_ckpt = ckpt
+    base_model = model = AutoModelForSequenceClassification.from_pretrained(ckpt,num_labels=1)
+    
+    return base_model
 
 class RobertaNoEmbedding(RobertaModel):
     def __init__(self, config):
