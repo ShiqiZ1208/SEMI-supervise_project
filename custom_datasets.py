@@ -102,7 +102,21 @@ class GANBARTDataset(Dataset):
             'mask_noun': mask_noun
             }
 
+class pseudoDataset(Dataset):
+    def __init__(self, input_ids, attention_mask, labels):
+        self.input_ids = input_ids
+        self.attention_mask = attention_mask
+        self.labels = labels
 
+    def __len__(self):
+        return len(self.input_ids)
+
+    def __getitem__(self, idx):
+        return {
+            "input_ids": self.input_ids[idx],
+            "attention_mask": self.attention_mask[idx],
+            "labels": self.labels[idx]
+        }
 
 def create_dataset(is_argument = False ,lecture_path=None, summary_path=None, is_test = False):
     # create datasets
@@ -197,7 +211,7 @@ def get_samsum(is_unsupervised=True):
       return train_dataset, validation_dataset, test_dataset
     else:
       #total_dataset = GANBARTDataset(list(ds["train"]["dialogue"]), list(ds["train"]["summary"]))
-      split_dataset = ds["train"].train_test_split(test_size=0.75,seed=42)
+      split_dataset = ds["train"].train_test_split(test_size=0.90,seed=42)
       #print(split_dataset["train"]["nouns"][0])
       train_dataset = GANBARTDataset(list(split_dataset['train']["dialogue"]), list(split_dataset['train']["summary"]), list(split_dataset["train"]["nouns"]), is_noun = True)
       u_train_dataset = GANBARTDataset(list(split_dataset['test']["dialogue"]), list(split_dataset['test']["summary"]), list(split_dataset["test"]["nouns"]), is_unsupervised = True, is_noun = True)

@@ -1,6 +1,7 @@
+from torch.nn.parallel.distributed import _tree_unflatten_with_rref
 from transformers import BartTokenizer, RobertaTokenizer
 from transformers.models.bert.modeling_tf_bert import _CHECKPOINT_FOR_DOC
-from custom_datasets import create_dataset, samsum_dataset, get_samsum, concatenate_summary_keyword
+from custom_datasets import create_dataset, samsum_dataset, get_samsum, concatenate_summary_keyword, pseudoDataset
 import evaluate
 from accelerate.test_utils.testing import get_backend
 from torch.utils.data import DataLoader
@@ -16,12 +17,13 @@ import os
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
 def train_model(n_epochs, minibatch_sizes, is_save, load_pathG, load_pathD, seed, is_load =False, BART_only=False):
 
 ########################################## load the tokenizer and model ##################################################
     # load model ckpt from huggingface and use it to tokenizer
-    is_load = False
+    is_load = True
+    threshold = 0.7
+    fine_tuning = False
     BART_model_ckpt = 'facebook/bart-base'
     RoBERTa_model_ckpt = "roberta-base"
     BA_tokenizer = BartTokenizer.from_pretrained(BART_model_ckpt)
@@ -34,10 +36,10 @@ def train_model(n_epochs, minibatch_sizes, is_save, load_pathG, load_pathD, seed
     NetD = BaseD_model
     if is_load:
       print("loadding from ckpt")
-      ckptG = "/content/drive/MyDrive/semi_gan_bart/SaveModel/lora_bartGAN_G_epoch0_5.pt"
+      ckptG = "/content/drive/MyDrive/semi_gan_bart/SaveModel/lora_bartGAN_G_epoch1_8.pt"
       ckptG = torch.load(ckptG, map_location="cuda")
       NetG.load_state_dict(ckptG['model_state'])
-      ckptD = "/content/drive/MyDrive/semi_gan_bart/SaveModel/lora_bartGAN_D_epoch0_5.pt"
+      ckptD = "/content/drive/MyDrive/semi_gan_bart/SaveModel/lora_bartGAN_D_epoch1_8.pt"
       ckptD = torch.load(ckptD, map_location="cuda")
       NetD.load_state_dict(ckptD['model_state'])
 
@@ -68,9 +70,18 @@ def train_model(n_epochs, minibatch_sizes, is_save, load_pathG, load_pathD, seed
       optimizerG.load_state_dict(ckptG['optimizer_state'])
       lr_schedulerD.load_state_dict(ckptD['lr_scheduler'])
       lr_schedulerG.load_state_dict(ckptG['lr_scheduler'])
+    if fine_tuning:
+      fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_dataloader, eval_dataloader, optimizerG, optimizerD, lr_schedulerG, lr_schedulerD, RBE_tokenizer, BA_tokenizer, is_save, rouge)
+    small_train_dataloader = DataLoader(t_dataset, shuffle=False, batch_size=int(minibatch_sizes/2), worker_init_fn=lambda worker_id: np.random.seed(seed))
+    for epoch in range(num_epochs):
+      pseudo_dataloader = generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_sizes, threshold, seed)
+      combine_dataset_training(epoch, small_train_dataloader, pseudo_dataloader, eval_dataloader, minibatch_sizes, NetG, NetD, optimizerD, optimizerG, lr_schedulerD, lr_schedulerG, RBE_tokenizer, BA_tokenizer, is_save, rouge)
 
+
+
+def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_dataloader, eval_dataloader, optimizerG, optimizerD, lr_schedulerG, lr_schedulerD, RBE_tokenizer, BA_tokenizer, is_save, rouge):
     print("\n=============================================start training==================================")
-
+    num_training_steps = num_epochs * len(train_dataloader)
     print(f"\nNum_Epochs:{num_epochs}, Batch_size:{minibatch_sizes}")
 
     progress_bar = tqdm(range(num_training_steps))
@@ -234,36 +245,265 @@ def train_model(n_epochs, minibatch_sizes, is_save, load_pathG, load_pathD, seed
         G_path = f"./SaveModel/lora_bartGAN_G_epoch{epoch}_{minibatch_sizes}.pt"
         D_path = f"./SaveModel/lora_bartGAN_D_epoch{epoch}_{minibatch_sizes}.pt"
         if is_save:
-            if is_load:
+          torch.save({
+              "model_state": NetG.state_dict(),
+              "optimizer_state": optimizerG.state_dict(),
+              "lr_scheduler": lr_schedulerG.state_dict(),
+              "epoch": epoch
+          }, G_path)
 
-              torch.save({
-                  "model_state": NetG.state_dict(),
-                  "optimizer_state": optimizerG.state_dict(),
-                  "lr_scheduler": lr_schedulerG.state_dict(),
-                  "epoch": epoch
-              }, G_path)
-
-              torch.save({
-                  "model_state": NetD.state_dict(),
-                  "optimizer_state": optimizerD.state_dict(),
-                  "lr_scheduler": lr_schedulerD.state_dict(),
-                  "epoch": epoch
-              }, D_path)
-            else:
-              torch.save({
-                  "model_state": NetG.state_dict(),
-                  "optimizer_state": optimizerG.state_dict(),
-                  "lr_scheduler": lr_schedulerG.state_dict(),
-                  "epoch": epoch
-              }, G_path)
-
-              torch.save({
-                  "model_state": NetD.state_dict(),
-                  "optimizer_state": optimizerD.state_dict(),
-                  "lr_scheduler": lr_schedulerD.state_dict(),
-                  "epoch": epoch
-              }, D_path)
+          torch.save({
+              "model_state": NetD.state_dict(),
+              "optimizer_state": optimizerD.state_dict(),
+              "lr_scheduler": lr_schedulerD.state_dict(),
+              "epoch": epoch
+          }, D_path)
     print("\n=============================================end training==================================")
+
+
+def generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_sizes, threshold, seed):
+    unlabeled_dataloader = DataLoader(u_t_dataset, shuffle=False, batch_size=30, worker_init_fn=lambda worker_id: np.random.seed(seed))
+    num_label_steps = len(unlabeled_dataloader)
+    progress_bar = tqdm(range(num_label_steps))
+    for param in NetG.parameters():
+        param.requires_grad = False
+    for param in NetD.parameters():
+        param.requires_grad = False
+    NetD.eval()
+    NetG.eval()
+    psudo_ids = []
+    psudo_label = []
+    psudo_mask = []
+    breaks = 0
+    num_pass = 0
+    test_flag = 0
+    for batch in unlabeled_dataloader:
+        #print(len(psudo_ids))
+        passed = 0
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        batch_knoun = batch['bert_noun'].to(device)
+        batch_knoun_mask = batch['mask_noun'].to(device)
+
+
+        genrated = NetG.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_length=256,
+                do_sample=False, 
+                num_beams=4,
+                early_stopping=True
+                )   
+        s_token_id = torch.tensor(0, device=device)
+        genrated = genrated[:, 1:]
+
+        genrated = genrated.detach()
+        padded_input_ids = F.pad(genrated, (0, 256 - genrated.shape[1]), value=1).detach()
+        roberta_attention_masks = (padded_input_ids != RBE_tokenizer.pad_token_id).long()
+        roberta_finput_ids, roberta_fattention_masks = concatenate_summary_keyword(padded_input_ids, roberta_attention_masks,batch_knoun,batch_knoun_mask,device,RBE_tokenizer)
+        flogits = NetD(roberta_finput_ids, attention_mask=roberta_fattention_masks)
+        pred = torch.sigmoid(flogits.logits.detach())
+        #print(pred.shape)
+        threshold = 0.7
+        mask = pred > threshold
+        passed = mask.sum().item()
+        mask = mask.squeeze(-1)
+        num_pass += passed
+        #print(mask.shape)
+        padded_output_ids = F.pad(genrated, (0, 512 - genrated.shape[1]), value=1).detach()
+        #print(padded_output_ids.shape)
+        #label_list = padded_output_ids[mask].tolist()
+        label_list = [seq for seq in padded_output_ids[mask]]
+        mask_list = [seq for seq in attention_mask[mask]]
+        ids_list = [seq for seq in input_ids[mask]]
+        psudo_label.extend(label_list)
+        psudo_mask.extend(label_list)
+        psudo_ids.extend(ids_list)
+        progress_bar.update(1)
+        test_flag += 1
+        if test_flag == 80:
+          break
+    print(len(psudo_ids))
+    pseudo_data = pseudoDataset(psudo_label,psudo_mask,psudo_ids)
+    p_dataset = DataLoader(pseudo_data, shuffle=False, batch_size=int(minibatch_sizes/2), worker_init_fn=lambda worker_id: np.random.seed(seed))
+    for param in NetG.parameters():
+        param.requires_grad = True
+    for param in NetD.parameters():
+        param.requires_grad = True
+    return p_dataset
+
+
+def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_dataloader, minibatch_sizes, NetG, NetD, optimizerD, optimizerG, lr_schedulerD, lr_schedulerG, RBE_tokenizer, BA_tokenizer, is_save, rouge):
+    print("\n=============================================start training==================================")
+    num_training_steps = len(pseudo_dataloader)
+    print(f"\nNum_Epochs:{epochs}, Batch_size:{minibatch_sizes}")
+
+    progress_bar = tqdm(range(num_training_steps))
+    A_t = []
+    A_f = []
+    batches = 0
+    NetD.train()
+    NetG.train()
+    for batch, psed_batch in zip(train_dataloader, pseudo_dataloader):
+        current_size = batch['input_ids'].shape[0]
+        real = 1.0
+        fake  = 0.0
+        reallabel  = torch.full((current_size,), real).unsqueeze(1).to(device) 
+        fakelabel  = torch.full((current_size,), fake).unsqueeze(1).to(device)
+
+        input_ids = batch['input_ids'].to(device)
+        attention_mask =batch['attention_mask'].to(device)
+        labels = batch['label'].to(device)
+
+        discrimnator_input_id = batch['bert_input_id'].to(device)
+        discrimnator_mask =batch['bert_mask'].to(device)
+
+        batch_knoun = batch['bert_noun'].to(device)
+        batch_knoun_mask = batch['mask_noun'].to(device)
+
+        pseudo_ids = psed_batch['input_ids'].to(device)
+        pseudo_attention_mask = psed_batch['attention_mask'].to(device)
+        pseudo_labels = psed_batch['labels'].to(device)
+
+        optimizerD.zero_grad()
+
+        genrated = NetG.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=256,
+            do_sample=False, 
+            num_beams=4,
+            early_stopping=True
+            )   
+        s_token_id = torch.tensor(0, device=device)
+        genrated = genrated[:, 1:]
+
+        genrated = genrated.detach()
+
+        padded_input_ids = F.pad(genrated, (0, 256 - genrated.shape[1]), value=1)
+        roberta_attention_masks = (padded_input_ids != RBE_tokenizer.pad_token_id).long()
+
+        roberta_finput_ids, roberta_fattention_masks = concatenate_summary_keyword(padded_input_ids, roberta_attention_masks,batch_knoun,batch_knoun_mask,device,RBE_tokenizer)
+        roberta_tinput_ids, roberta_tattention_masks = concatenate_summary_keyword(discrimnator_input_id, discrimnator_mask,batch_knoun,batch_knoun_mask,device,RBE_tokenizer)
+
+
+        attention_mask_hidden = torch.ones(int(minibatch_sizes/2), 256).long()
+        flogits = NetD(roberta_finput_ids, attention_mask=roberta_fattention_masks)
+        tlogits = NetD(roberta_tinput_ids, attention_mask=roberta_tattention_masks)
+
+        loss1 = classification_loss(tlogits.logits, reallabel)
+        loss2 = classification_loss(flogits.logits, fakelabel)
+
+        preds = (torch.sigmoid(tlogits.logits.detach()) >= 0.5).long()
+        accuracyT = (preds == labels).float().mean()
+        A_t.append(accuracyT)
+        preds = (torch.sigmoid(flogits.logits.detach()) <= 0.5).long()
+        accuracyF = (preds == labels).float().mean()
+        A_f.append(accuracyF)
+        alpha = 0.6
+        Dloss = alpha*loss1 + (1-alpha)*loss2
+        Dloss.backward()
+        clip_grad_norm_(NetD.parameters(), max_norm=1.0)
+        optimizerD.step()
+        lr_schedulerD.step()
+
+            #for p in NetG.parameters():
+                #p.requires_grad = True
+        for p in NetD.parameters():
+            p.requires_grad = False
+
+        optimizerG.zero_grad()
+
+        output1_g = NetG(input_ids=input_ids, attention_mask=attention_mask, labels = labels)
+        supervised_loss = output1_g.loss
+        output2_g = NetG(input_ids=pseudo_ids, attention_mask=pseudo_attention_mask, labels = pseudo_labels)
+        unsupervised_loss = output2_g.loss
+        Gloss = supervised_loss + 0.7 * unsupervised_loss
+        Gloss.backward()
+        clip_grad_norm_(NetG.parameters(), max_norm=1.0)
+        optimizerG.step()
+        lr_schedulerG.step()
+        for p in NetD.parameters():
+            p.requires_grad = True
+        if batches % 20 == 0:
+          print("\nEpoch:{: <5}| Batch:{: <5}| Gtrain_loss:{: <5.4f}| Dtrain_loss:{: <5.4f}|{: <5.4f}".format(epochs, batches, Gloss.item() , loss1, loss2))
+          print("\n discrimnator prediction:{: .2%}|{: .2%}".format(sum(A_t)/len(A_t), sum(A_f)/len(A_f)))
+          A_t = []
+          A_f = []
+        progress_bar.update(1)
+        batches += 1
+    print(f"\n======================================Start Validation for Epoch: {epochs}==================================")
+    NetG.eval()
+
+    pred_list = []
+    ref_list = []
+    loss_list = []
+
+    for batch in eval_dataloader:
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['label'].to(device)
+
+        with torch.no_grad():
+            outputs = NetG(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
+            gen_tokens = NetG.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_length=256,
+                    do_sample=False,
+                    num_beams=4,
+                    early_stopping=True
+                )
+
+        loss_list.append(outputs.loss.item())
+
+            # decode
+        for i in range(len(gen_tokens)):
+            pred_list.append(
+                    BA_tokenizer.decode(gen_tokens[i], skip_special_tokens=True)
+                )
+            ref_list.append(
+                    BA_tokenizer.decode(labels[i], skip_special_tokens=True)
+                )
+
+    # compute ROUGE once
+    r_score = rouge.compute(predictions=pred_list, references=ref_list)
+    average_loss = sum(loss_list) / len(loss_list)
+
+    print("\nEpoch:{: <5}| validation_loss:{: <5.4f}".format(epochs, average_loss))
+    print("\nrouge1:{: <5.4f}| rouge2:{: <5.4f}| rougeL:{: <5.4f}| rougeLsum:{: <5.4f}".format(r_score['rouge1'], r_score['rouge2'], r_score['rougeL'], r_score['rougeLsum']))
+    print(f"\n======================================End Validation for Epoch: {epochs}==================================")
+
+    print(f"\n======================================saving model for : {epochs}==================================")
+    G_path = f"./SaveModel/lora_bartGAN_G_epoch{epochs}_{minibatch_sizes}_pesudo.pt"
+    D_path = f"./SaveModel/lora_bartGAN_D_epoch{epochs}_{minibatch_sizes}_pesudo.pt"
+    if is_save:
+      torch.save({
+          "model_state": NetG.state_dict(),
+          "optimizer_state": optimizerG.state_dict(),
+          "lr_scheduler": lr_schedulerG.state_dict(),
+          "epoch": epochs
+      }, G_path)
+
+      torch.save({
+          "model_state": NetD.state_dict(),
+          "optimizer_state": optimizerD.state_dict(),
+          "lr_scheduler": lr_schedulerD.state_dict(),
+          "epoch": epochs
+      }, D_path)
+    print("\n=============================================end training==================================")
+
+
+
+
+
+
+
+
 
 def model_predict(input_texts_file, pathG):
   model_ckpt = 'facebook/bart-large-cnn'

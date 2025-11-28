@@ -1,4 +1,5 @@
-from custom_datasets import create_dataset, samsum_dataset, get_samsum, concatenate_summary_keyword
+from transformers.models.maskformer.modeling_maskformer import pair_wise_sigmoid_focal_loss
+from custom_datasets import create_dataset, samsum_dataset, get_samsum, concatenate_summary_keyword, pseudoDataset
 from transformers import RobertaTokenizer
 import torch
 from torch.nn.utils.rnn import pad_sequence
@@ -24,6 +25,7 @@ if is_load:
     ckptD = torch.load(ckptD, map_location="cuda")
     NetD.load_state_dict(ckptD['model_state'])
 RBE_tokenizer = RobertaTokenizer.from_pretrained(RoBERTa_model_ckpt)
+tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 NetG = NetG.to(device)
 NetD = NetD.to(device)
 for param in NetG.parameters():
@@ -32,10 +34,14 @@ for param in NetD.parameters():
     param.requires_grad = False
 NetD.eval()
 NetG.eval()
-psudo_ids = []
 
+psudo_ids = []
+psudo_label = []
+psudo_mask = []
+breaks = 0
 num_pass = 0
 for batch in eval_dataloader:
+    print(len(psudo_ids))
     passed = 0
     input_ids = batch['input_ids'].to(device)
     attention_mask = batch['attention_mask'].to(device)
@@ -57,7 +63,7 @@ for batch in eval_dataloader:
     genrated = genrated[:, 1:]
 
     genrated = genrated.detach()
-    padded_input_ids = F.pad(genrated, (0, 256 - genrated.shape[1]), value=1)
+    padded_input_ids = F.pad(genrated, (0, 256 - genrated.shape[1]), value=1).detach()
     roberta_attention_masks = (padded_input_ids != RBE_tokenizer.pad_token_id).long()
     roberta_finput_ids, roberta_fattention_masks = concatenate_summary_keyword(padded_input_ids, roberta_attention_masks,batch_knoun,batch_knoun_mask,device,RBE_tokenizer)
     flogits = NetD(roberta_finput_ids, attention_mask=roberta_fattention_masks)
@@ -66,11 +72,36 @@ for batch in eval_dataloader:
     threshold = 0.7
     mask = pred > threshold
     passed = mask.sum().item()
+    mask = mask.squeeze(-1)
     num_pass += passed
+    print(mask)
+    padded_output_ids = F.pad(genrated, (0, 512 - genrated.shape[1]), value=1).detach()
+    print(padded_output_ids.shape)
+    #label_list = padded_output_ids[mask].tolist()
+    label_list = [seq for seq in padded_output_ids[mask]]
+    mask_list = [seq for seq in attention_mask[mask]]
+    ids_list = [seq for seq in input_ids[mask]]
+    psudo_label.extend(label_list)
+    psudo_mask.extend(label_list)
+    psudo_ids.extend(ids_list)
+    breaks += 1
+    if breaks == 5:
+      break
 
+pseudo_data = pseudoDataset(psudo_label,psudo_mask,psudo_ids)
+p_dataset = DataLoader(pseudo_data, shuffle=False, batch_size=3, worker_init_fn=lambda worker_id: np.random.seed(seed))
 
-
-print(num_pass)
+for batch in p_dataset:
+    #batch["input_ids"]
+    #batch["attention_mask"]
+    #batch["labels"]
+    tokens1 = tokenizer.convert_ids_to_tokens(batch["input_ids"][0])
+    tokens2 = tokenizer.convert_ids_to_tokens(batch["labels"][0])
+    print(tokens1)
+    print(tokens2)
+#print(len(psudo_label))
+#print(len(psudo_ids))
+#print(len(psudo_mask))
 '''
 #print(data_1[0])
 device = "cuda"
