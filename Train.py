@@ -84,8 +84,7 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
     print(f"\nNum_Epochs:{num_epochs}, Batch_size:{minibatch_sizes}")
 
     progress_bar = tqdm(range(num_training_steps))
-    num_valid_steps = len(eval_dataloader)
-    progress_bar2 = tqdm(range(num_valid_steps))
+
 
     epochs = 0
     #loss_record = []
@@ -97,6 +96,8 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
     A_t = []
     A_f = []
     for epoch in range(num_epochs):
+        num_valid_steps = len(eval_dataloader)
+        progress_bar2 = tqdm(range(num_valid_steps))
         batches = 0
         NetD.train()
         NetG.train()
