@@ -17,11 +17,10 @@ import os
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def train_model(n_epochs, minibatch_sizes, is_save, load_pathG, load_pathD, seed, is_load =False, BART_only=False):
+def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pathD, seed, BART_only=False):
 
 ########################################## load the tokenizer and model ##################################################
     # load model ckpt from huggingface and use it to tokenizer
-    is_load = True
     threshold = 0.7
     fine_tuning = False
     BART_model_ckpt = 'facebook/bart-base'
