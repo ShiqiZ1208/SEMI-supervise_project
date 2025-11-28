@@ -1,6 +1,6 @@
 from torch.nn.parallel.distributed import _tree_unflatten_with_rref
 from transformers import BartTokenizer, RobertaTokenizer
-from transformers.models.bert.modeling_tf_bert import _CHECKPOINT_FOR_DOC
+#from transformers.models.bert.modeling_tf_bert import _CHECKPOINT_FOR_DOC
 from custom_datasets import create_dataset, samsum_dataset, get_samsum, concatenate_summary_keyword, pseudoDataset
 import evaluate
 from accelerate.test_utils.testing import get_backend
