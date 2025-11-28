@@ -80,7 +80,7 @@ def train_model(n_epochs, minibatch_sizes, is_save, load_pathG, load_pathD, seed
 
 
 def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_dataloader, eval_dataloader, optimizerG, optimizerD, lr_schedulerG, lr_schedulerD, RBE_tokenizer, BA_tokenizer, is_save, rouge):
-    print("\n=============================================start training==================================")
+    print("\n=============================================fine tuning==================================")
     num_training_steps = num_epochs * len(train_dataloader)
     print(f"\nNum_Epochs:{num_epochs}, Batch_size:{minibatch_sizes}")
 
@@ -192,7 +192,7 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
               A_f = []
             progress_bar.update(1)
             batches += 1
-        print(f"\n======================================Start Validation for Epoch: {epochs}==================================")
+        print(f"\n============================Start Validation for fine tune Epoch: {epochs}================================")
         NetG.eval()
 
         pred_list = []
@@ -238,12 +238,12 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
         print("\nrouge1:{: <5.4f}| rouge2:{: <5.4f}| rougeL:{: <5.4f}| rougeLsum:{: <5.4f}".format(r_score['rouge1'], r_score['rouge2'], r_score['rougeL'], r_score['rougeLsum']))
         rouge_list = [r_score['rouge1'], r_score['rouge2'], r_score['rougeL'], r_score['rougeLsum']]
         Rouge_record.append(rouge_list)
-        print(f"\n======================================End Validation for Epoch: {epochs}==================================")
+        print(f"\n=============================End Validation for fine tune Epoch: {epochs}==================================")
 
         epochs += 1
-        print(f"\n======================================saving model for : {epochs}==================================")
-        G_path = f"./SaveModel/lora_bartGAN_G_epoch{epoch}_{minibatch_sizes}.pt"
-        D_path = f"./SaveModel/lora_bartGAN_D_epoch{epoch}_{minibatch_sizes}.pt"
+        print(f"\n==============================saving model for fine tune: {epochs}==================================")
+        G_path = f"./SaveModel/lora_bartGAN_G_epoch{epoch}_{minibatch_sizes}_fine_tune.pt"
+        D_path = f"./SaveModel/lora_bartGAN_D_epoch{epoch}_{minibatch_sizes}_fine_tune.pt"
         if is_save:
           torch.save({
               "model_state": NetG.state_dict(),
@@ -258,7 +258,7 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
               "lr_scheduler": lr_schedulerD.state_dict(),
               "epoch": epoch
           }, D_path)
-    print("\n=============================================end training==================================")
+    print("\n=============================================end fine tuning==================================")
 
 
 def generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_sizes, threshold, seed):
@@ -277,6 +277,7 @@ def generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_size
     breaks = 0
     num_pass = 0
     test_flag = 0
+    print("\n=============================================generate pseudo label==================================")
     for batch in unlabeled_dataloader:
         #print(len(psudo_ids))
         passed = 0
@@ -294,7 +295,7 @@ def generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_size
                 num_beams=4,
                 early_stopping=True
                 )   
-        s_token_id = torch.tensor(0, device=device)
+        #s_token_id = torch.tensor(0, device=device)
         genrated = genrated[:, 1:]
 
         genrated = genrated.detach()
@@ -320,10 +321,11 @@ def generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_size
         psudo_mask.extend(label_list)
         psudo_ids.extend(ids_list)
         progress_bar.update(1)
-        test_flag += 1
-        if test_flag == 80:
-          break
-    print(len(psudo_ids))
+        #test_flag += 1
+        #if test_flag == 80:
+          #break
+    print("\n========================================end generate pseudo label==================================")
+    print("number of labels generated: ", len(psudo_ids))
     pseudo_data = pseudoDataset(psudo_label,psudo_mask,psudo_ids)
     p_dataset = DataLoader(pseudo_data, shuffle=False, batch_size=int(minibatch_sizes/2), worker_init_fn=lambda worker_id: np.random.seed(seed))
     for param in NetG.parameters():
