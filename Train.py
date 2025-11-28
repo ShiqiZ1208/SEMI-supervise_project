@@ -1,5 +1,6 @@
 from transformers import BartTokenizer, RobertaTokenizer
-from custom_datasets import create_dataset, samsum_dataset, get_samsum
+from transformers.models.bert.modeling_tf_bert import _CHECKPOINT_FOR_DOC
+from custom_datasets import create_dataset, samsum_dataset, get_samsum, concatenate_summary_keyword
 import evaluate
 from accelerate.test_utils.testing import get_backend
 from torch.utils.data import DataLoader
@@ -16,11 +17,12 @@ import os
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pathD, seed, BART_only=False):
+def train_model(n_epochs, minibatch_sizes, is_save, load_pathG, load_pathD, seed, is_load =False, BART_only=False):
 
 ########################################## load the tokenizer and model ##################################################
     # load model ckpt from huggingface and use it to tokenizer
-    BART_model_ckpt = 'facebook/bart-large'
+    is_load = False
+    BART_model_ckpt = 'facebook/bart-base'
     RoBERTa_model_ckpt = "roberta-base"
     BA_tokenizer = BartTokenizer.from_pretrained(BART_model_ckpt)
     RBE_tokenizer = RobertaTokenizer.from_pretrained(RoBERTa_model_ckpt)
@@ -30,7 +32,18 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
     NetG = BaseG_model
     BaseD_model = RoBERTa_base_model(RoBERTa_model_ckpt)
     NetD = BaseD_model
+    if is_load:
+      print("loadding from ckpt")
+      ckptG = "/content/drive/MyDrive/semi_gan_bart/SaveModel/lora_bartGAN_G_epoch0_5.pt"
+      ckptG = torch.load(ckptG, map_location="cuda")
+      NetG.load_state_dict(ckptG['model_state'])
+      ckptD = "/content/drive/MyDrive/semi_gan_bart/SaveModel/lora_bartGAN_D_epoch0_5.pt"
+      ckptD = torch.load(ckptD, map_location="cuda")
+      NetD.load_state_dict(ckptD['model_state'])
 
+    device, _, _ = get_backend() # make sure the device is in gpu
+    NetG.to(device)
+    NetD.to(device)
     t_dataset, v_dataset, test_dataset, u_t_dataset = get_samsum() #get_samsum() # load datasets
     train_dataloader = DataLoader(t_dataset, shuffle=False, batch_size=minibatch_sizes, worker_init_fn=lambda worker_id: np.random.seed(seed))
     eval_dataloader = DataLoader(v_dataset, shuffle=False, batch_size=minibatch_sizes, worker_init_fn=lambda worker_id: np.random.seed(seed))
@@ -50,10 +63,12 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
     lr_schedulerD = get_scheduler(
         name="linear", optimizer=optimizerD, num_warmup_steps=num_warm_up, num_training_steps=num_training_steps
     )
+    if is_load:
+      optimizerD.load_state_dict(ckptD['optimizer_state'])
+      optimizerG.load_state_dict(ckptG['optimizer_state'])
+      lr_schedulerD.load_state_dict(ckptD['lr_scheduler'])
+      lr_schedulerG.load_state_dict(ckptG['lr_scheduler'])
 
-    device, _, _ = get_backend() # make sure the device is in gpu
-    NetG.to(device)
-    NetD.to(device)
     print("\n=============================================start training==================================")
 
     print(f"\nNum_Epochs:{num_epochs}, Batch_size:{minibatch_sizes}")
@@ -95,6 +110,8 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
             discrimnator_input_id = batch['bert_input_id'].to(device)
             discrimnator_mask =batch['bert_mask'].to(device)
 
+            batch_knoun = batch['bert_noun'].to(device)
+            batch_knoun_mask = batch['mask_noun'].to(device)
 
             optimizerD.zero_grad()
 
@@ -114,18 +131,13 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
             padded_input_ids = F.pad(genrated, (0, 256 - genrated.shape[1]), value=1)
             roberta_attention_masks = (padded_input_ids != RBE_tokenizer.pad_token_id).long()
 
-            roberta_finput_ids = padded_input_ids.to(device)
-            roberta_fattention_masks = roberta_attention_masks.to(device)
-
-            roberta_tinput_ids = discrimnator_input_id
-            roberta_tattention_masks = (roberta_tinput_ids != RBE_tokenizer.pad_token_id).long()
-
-
+            roberta_finput_ids, roberta_fattention_masks = concatenate_summary_keyword(padded_input_ids, roberta_attention_masks,batch_knoun,batch_knoun_mask,device,RBE_tokenizer)
+            roberta_tinput_ids, roberta_tattention_masks = concatenate_summary_keyword(discrimnator_input_id, discrimnator_mask,batch_knoun,batch_knoun_mask,device,RBE_tokenizer)
 
 
             attention_mask_hidden = torch.ones(minibatch_sizes, 256).long()
-            flogits = NetD(roberta_finput_ids, attention_mask=attention_mask_hidden)
-            tlogits = NetD(roberta_tinput_ids, attention_mask=attention_mask_hidden)
+            flogits = NetD(roberta_finput_ids, attention_mask=roberta_fattention_masks)
+            tlogits = NetD(roberta_tinput_ids, attention_mask=roberta_tattention_masks)
 
             loss1 = classification_loss(tlogits.logits, reallabel)
             loss2 = classification_loss(flogits.logits, fakelabel)
@@ -133,10 +145,11 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
             preds = (torch.sigmoid(tlogits.logits.detach()) >= 0.5).long()
             accuracyT = (preds == labels).float().mean()
             A_t.append(accuracyT)
-            preds = (torch.sigmoid(flogits.logits.detach()) >= 0.5).long()
+            preds = (torch.sigmoid(flogits.logits.detach()) <= 0.5).long()
             accuracyF = (preds == labels).float().mean()
             A_f.append(accuracyF)
-            Dloss = (loss1 + loss2)/2
+            alpha = 0.6
+            Dloss = alpha*loss1 + (1-alpha)*loss2
             Dloss.backward()
             clip_grad_norm_(NetD.parameters(), max_norm=1.0)
             optimizerD.step()
@@ -168,8 +181,6 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
               A_f = []
             progress_bar.update(1)
             batches += 1
-
-
         print(f"\n======================================Start Validation for Epoch: {epochs}==================================")
         NetG.eval()
 
