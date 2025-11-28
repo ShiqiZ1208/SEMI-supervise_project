@@ -211,7 +211,7 @@ def get_samsum(is_unsupervised=True):
       return train_dataset, validation_dataset, test_dataset
     else:
       #total_dataset = GANBARTDataset(list(ds["train"]["dialogue"]), list(ds["train"]["summary"]))
-      split_dataset = ds["train"].train_test_split(test_size=0.90,seed=42)
+      split_dataset = ds["train"].train_test_split(test_size=0.91,seed=42)
       #print(split_dataset["train"]["nouns"][0])
       train_dataset = GANBARTDataset(list(split_dataset['train']["dialogue"]), list(split_dataset['train']["summary"]), list(split_dataset["train"]["nouns"]), is_noun = True)
       u_train_dataset = GANBARTDataset(list(split_dataset['test']["dialogue"]), list(split_dataset['test']["summary"]), list(split_dataset["test"]["nouns"]), is_unsupervised = True, is_noun = True)

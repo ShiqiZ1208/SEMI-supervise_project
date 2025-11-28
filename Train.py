@@ -22,7 +22,7 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
 ########################################## load the tokenizer and model ##################################################
     # load model ckpt from huggingface and use it to tokenizer
     threshold = 0.7
-    fine_tuning = False
+    fine_tuning = True
     BART_model_ckpt = 'facebook/bart-base'
     RoBERTa_model_ckpt = "roberta-base"
     BA_tokenizer = BartTokenizer.from_pretrained(BART_model_ckpt)
@@ -70,7 +70,7 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
       lr_schedulerD.load_state_dict(ckptD['lr_scheduler'])
       lr_schedulerG.load_state_dict(ckptG['lr_scheduler'])
     if fine_tuning:
-      fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_dataloader, eval_dataloader, optimizerG, optimizerD, lr_schedulerG, lr_schedulerD, RBE_tokenizer, BA_tokenizer, is_save, rouge)
+      fine_tune_model(NetG, NetD, device, 2, minibatch_sizes, train_dataloader, eval_dataloader, optimizerG, optimizerD, lr_schedulerG, lr_schedulerD, RBE_tokenizer, BA_tokenizer, is_save, rouge)
     small_train_dataloader = DataLoader(t_dataset, shuffle=False, batch_size=int(minibatch_sizes/2), worker_init_fn=lambda worker_id: np.random.seed(seed))
     for epoch in range(num_epochs):
       pseudo_dataloader = generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_sizes, threshold, seed)
@@ -84,19 +84,13 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
     print(f"\nNum_Epochs:{num_epochs}, Batch_size:{minibatch_sizes}")
 
     progress_bar = tqdm(range(num_training_steps))
+    num_valid_steps = len(eval_dataloader)
+    progress_bar2 = tqdm(range(num_valid_steps))
 
     epochs = 0
-    loss_record = []
-    Rouge_record = []
-    best_val_loss = float('inf')
-    best_rouge_1 = float('inf')
-    best_epoch = 0
-    epochs_without_improvement = 0
-    patience = 3
-    time_for_discriminator = 0
-    time_for_generator = 0
-    time_for_convert = 0
-    max_alpha = 1
+    #loss_record = []
+    #Rouge_record = []
+    #max_alpha = 1
     batches = 0
     dis_only = False
     bart_loss = 0
@@ -167,7 +161,7 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
 
             #for p in NetG.parameters():
                 #p.requires_grad = True
-            if dis_only== False:
+            if epochs > 0:
                 for p in NetD.parameters():
                     p.requires_grad = False
 
@@ -193,7 +187,6 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
             batches += 1
         print(f"\n============================Start Validation for fine tune Epoch: {epochs}================================")
         NetG.eval()
-
         pred_list = []
         ref_list = []
         loss_list = []
@@ -228,7 +221,7 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
                 ref_list.append(
                     BA_tokenizer.decode(labels[i], skip_special_tokens=True)
                 )
-
+            progress_bar2.update(1)
         # compute ROUGE once
         r_score = rouge.compute(predictions=pred_list, references=ref_list)
         average_loss = sum(loss_list) / len(loss_list)
@@ -236,7 +229,7 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
         print("\nEpoch:{: <5}| validation_loss:{: <5.4f}".format(epochs, average_loss))
         print("\nrouge1:{: <5.4f}| rouge2:{: <5.4f}| rougeL:{: <5.4f}| rougeLsum:{: <5.4f}".format(r_score['rouge1'], r_score['rouge2'], r_score['rougeL'], r_score['rougeLsum']))
         rouge_list = [r_score['rouge1'], r_score['rouge2'], r_score['rougeL'], r_score['rougeLsum']]
-        Rouge_record.append(rouge_list)
+        #Rouge_record.append(rouge_list)
         print(f"\n=============================End Validation for fine tune Epoch: {epochs}==================================")
 
         epochs += 1
@@ -340,6 +333,8 @@ def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_d
     print(f"\nNum_Epochs:{epochs}, Batch_size:{minibatch_sizes}")
 
     progress_bar = tqdm(range(num_training_steps))
+    num_valid_steps = len(eval_dataloader)
+    progress_bar2 = tqdm(range(num_valid_steps))
     A_t = []
     A_f = []
     batches = 0
@@ -470,7 +465,7 @@ def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_d
             ref_list.append(
                     BA_tokenizer.decode(labels[i], skip_special_tokens=True)
                 )
-
+        progress_bar2.update(1)
     # compute ROUGE once
     r_score = rouge.compute(predictions=pred_list, references=ref_list)
     average_loss = sum(loss_list) / len(loss_list)
