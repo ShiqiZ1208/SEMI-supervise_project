@@ -311,7 +311,7 @@ def generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_size
         mask_list = [seq for seq in attention_mask[mask]]
         ids_list = [seq for seq in input_ids[mask]]
         psudo_label.extend(label_list)
-        psudo_mask.extend(label_list)
+        psudo_mask.extend(mask_list)
         psudo_ids.extend(ids_list)
         progress_bar.update(1)
         #test_flag += 1
