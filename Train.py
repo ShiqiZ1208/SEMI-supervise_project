@@ -74,7 +74,7 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
     small_train_dataloader = DataLoader(t_dataset, shuffle=False, batch_size=int(minibatch_sizes/2), worker_init_fn=lambda worker_id: np.random.seed(seed))
     for epoch in range(num_epochs):
       pseudo_dataloader = generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_sizes, threshold, seed)
-      combine_dataset_training(epoch, small_train_dataloader, pseudo_dataloader, eval_dataloader, minibatch_sizes, NetG, NetD, optimizerD, optimizerG, lr_schedulerD, lr_schedulerG, RBE_tokenizer, BA_tokenizer, is_save, rouge)
+      combine_dataset_training(epoch, small_train_dataloader, pseudo_dataloader, eval_dataloader, minibatch_sizes, NetG, NetD, optimizerD, optimizerG, RBE_tokenizer, BA_tokenizer, is_save, rouge)
 
 
 
@@ -328,7 +328,7 @@ def generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_size
     return p_dataset
 
 
-def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_dataloader, minibatch_sizes, NetG, NetD, optimizerD, optimizerG, lr_schedulerD, lr_schedulerG, RBE_tokenizer, BA_tokenizer, is_save, rouge):
+def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_dataloader, minibatch_sizes, NetG, NetD, optimizerD, optimizerG, RBE_tokenizer, BA_tokenizer, is_save, rouge):
     print("\n=============================================start training==================================")
     num_training_steps = len(pseudo_dataloader)
     print(f"\nNum_Epochs:{epochs}, Batch_size:{minibatch_sizes}")
@@ -402,7 +402,7 @@ def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_d
         Dloss.backward()
         clip_grad_norm_(NetD.parameters(), max_norm=1.0)
         optimizerD.step()
-        lr_schedulerD.step()
+        #lr_schedulerD.step()
 
             #for p in NetG.parameters():
                 #p.requires_grad = True
@@ -419,7 +419,7 @@ def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_d
         Gloss.backward()
         clip_grad_norm_(NetG.parameters(), max_norm=1.0)
         optimizerG.step()
-        lr_schedulerG.step()
+        #lr_schedulerG.step()
         for p in NetD.parameters():
             p.requires_grad = True
         if batches % 20 == 0:
@@ -482,14 +482,14 @@ def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_d
       torch.save({
           "model_state": NetG.state_dict(),
           "optimizer_state": optimizerG.state_dict(),
-          "lr_scheduler": lr_schedulerG.state_dict(),
+          #"lr_scheduler": lr_schedulerG.state_dict(),
           "epoch": epochs
       }, G_path)
 
       torch.save({
           "model_state": NetD.state_dict(),
           "optimizer_state": optimizerD.state_dict(),
-          "lr_scheduler": lr_schedulerD.state_dict(),
+          #"lr_scheduler": lr_schedulerD.state_dict(),
           "epoch": epochs
       }, D_path)
     print("\n=============================================end training==================================")
