@@ -466,7 +466,7 @@ def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_d
             ref_list.append(
                     BA_tokenizer.decode(labels[i], skip_special_tokens=True)
                 )
-    progress_bar2.update(1)
+        progress_bar2.update(1)
     # compute ROUGE once
     r_score = rouge.compute(predictions=pred_list, references=ref_list)
     average_loss = sum(loss_list) / len(loss_list)
