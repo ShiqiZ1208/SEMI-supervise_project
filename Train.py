@@ -75,7 +75,7 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
     for epoch in range(num_epochs):
       pseudo_dataloader = generate_pseudo_label(NetD, NetG, RBE_tokenizer, u_t_dataset, minibatch_sizes, threshold, seed)
       combine_dataset_training(epoch, small_train_dataloader, pseudo_dataloader, eval_dataloader, minibatch_sizes, NetG, NetD, optimizerD, optimizerG, RBE_tokenizer, BA_tokenizer, is_save, rouge)
-
+      threshold = threshold + 0.05
 
 
 def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_dataloader, eval_dataloader, optimizerG, optimizerD, lr_schedulerG, lr_schedulerD, RBE_tokenizer, BA_tokenizer, is_save, rouge):
