@@ -51,7 +51,7 @@ def train_model(n_epochs, minibatch_sizes, is_save, is_load, load_pathG, load_pa
     eval_dataloader = DataLoader(v_dataset, shuffle=False, batch_size=minibatch_sizes, worker_init_fn=lambda worker_id: np.random.seed(seed))
     rouge = evaluate.load("rouge")
 
-    optimizerG = AdamW(NetG.parameters(), lr=5e-5) # set up optimizer for Generator
+    optimizerG = AdamW(NetG.parameters(), lr=3e-5) # set up optimizer for Generator
     optimizerD = AdamW(NetD.parameters(), lr=2e-5) # set up optimizer for Discrimnator
 
     num_epochs = n_epochs # training epochs
