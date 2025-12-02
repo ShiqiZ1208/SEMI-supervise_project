@@ -97,8 +97,8 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
     A_t = []
     A_f = []
     for epoch in range(num_epochs):
-        num_valid_steps = len(eval_dataloader)
-        progress_bar2 = tqdm(range(num_valid_steps))
+        #num_valid_steps = len(eval_dataloader)
+        #progress_bar2 = tqdm(range(num_valid_steps))
         batches = 0
         NetD.train()
         NetG.train()
@@ -223,7 +223,7 @@ def fine_tune_model(NetG, NetD, device, num_epochs, minibatch_sizes, train_datal
                 ref_list.append(
                     BA_tokenizer.decode(labels[i], skip_special_tokens=True)
                 )
-            progress_bar2.update(1)
+            #progress_bar2.update(1)
         # compute ROUGE once
         r_score = rouge.compute(predictions=pred_list, references=ref_list)
         average_loss = sum(loss_list) / len(loss_list)
@@ -348,8 +348,8 @@ def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_d
     print(f"\nNum_Epochs:{epochs}, Batch_size:{minibatch_sizes}")
 
     progress_bar = tqdm(range(num_training_steps))
-    num_valid_steps = len(eval_dataloader)
-    progress_bar2 = tqdm(range(num_valid_steps))
+    #num_valid_steps = len(eval_dataloader)
+    #progress_bar2 = tqdm(range(num_valid_steps))
     A_t = []
     A_f = []
     batches = 0
@@ -480,7 +480,7 @@ def combine_dataset_training(epochs, train_dataloader, pseudo_dataloader, eval_d
             ref_list.append(
                     BA_tokenizer.decode(labels[i], skip_special_tokens=True)
                 )
-        progress_bar2.update(1)
+        #progress_bar2.update(1)
     # compute ROUGE once
     r_score = rouge.compute(predictions=pred_list, references=ref_list)
     average_loss = sum(loss_list) / len(loss_list)
